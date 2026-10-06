@@ -10,10 +10,10 @@ The project focuses on clean REST APIs, authentication, database modelling, auth
 
 - Python
 - Flask
-- Flask-SQLAlchemy
+- Python's built-in `sqlite3` module with raw SQL (no ORM)
+- SQLite database
 - Flask-JWT-Extended
-- SQLite for local development
-- PostgreSQL support through `DATABASE_URL`
+- Werkzeug password hashing
 - Pytest
 
 ---
@@ -77,17 +77,19 @@ pip install -r requirements.txt
 
 The application works locally without additional configuration.
 
-For production or PostgreSQL, environment variables can be provided:
+Environment variables can be provided to override the defaults:
 
 ```bash
-export DATABASE_URL="postgresql://user:password@localhost/eve"
+export DATABASE_PATH="eve.db"
 export JWT_SECRET_KEY="your-secure-secret-key"
 ```
 
-If `DATABASE_URL` is not provided, SQLite is used:
+If `DATABASE_PATH` is not provided, the SQLite database file `eve.db` is used.
 
-```text
-sqlite:///eve.db
+Tables are created with raw `CREATE TABLE IF NOT EXISTS` SQL when the app starts with `python app.py`. They can also be created manually:
+
+```bash
+flask --app app init-db
 ```
 
 The JWT secret included in the source is only a local-development fallback and should be replaced using an environment variable in production.
@@ -445,7 +447,7 @@ Each webhook event contains a unique:
 event_id
 ```
 
-Processed event IDs are stored in the `WebhookEvent` table.
+Processed event IDs are stored in the `webhook_event` table.
 
 The `event_id` column has a database-level unique constraint.
 
@@ -458,7 +460,7 @@ If the same event is delivered again:
 - the booking state is not incorrectly applied multiple times
 - the endpoint safely returns success
 
-The unique database constraint also provides protection if duplicate webhook requests arrive close together.
+The webhook is processed inside an explicit SQLite transaction (`BEGIN IMMEDIATE` … `COMMIT`, with `ROLLBACK` on failure), and the unique database constraint also provides protection if duplicate webhook requests arrive close together.
 
 Example duplicate response:
 
@@ -474,7 +476,9 @@ Example duplicate response:
 
 # Database Design
 
-The main entities are:
+Tables are defined with raw SQL in `app.py` (`PRIMARY KEY`, `FOREIGN KEY`, `UNIQUE`, `NOT NULL`, `CHECK`). Foreign key enforcement is enabled on every connection with `PRAGMA foreign_keys = ON`.
+
+The main tables are:
 
 ```text
 User
@@ -656,16 +660,21 @@ Run:
 python -m pytest -v
 ```
 
+Tests use a separate `test_eve.db` SQLite file that is recreated before and deleted after every test.
+
 The automated test suite currently covers:
 
-1. User registration and login
-2. Booking and successful payment flow
-3. Payment webhook idempotency
+1. User registration, login and JWT-protected `/auth/me`
+2. Centre and diagnostic test creation/listing
+3. Booking and successful payment flow
+4. Failed payment and booking cancellation
+5. Booking ownership authorization
+6. Payment webhook idempotency
 
 Expected result:
 
 ```text
-3 passed
+6 passed
 ```
 
 ---
@@ -699,7 +708,7 @@ Expected result:
 - A webhook provider generates a unique `event_id` for every logical payment event.
 - Webhook payment statuses are limited to `SUCCESS` and `FAILED`.
 - SQLite is sufficient for local evaluation.
-- PostgreSQL is preferred for a production environment and is supported using `DATABASE_URL`.
+- PostgreSQL would be preferred for a production environment (not currently supported).
 - Appointment date/time is supplied in ISO format.
 - Payments should not revive a booking that has already been cancelled.
 
@@ -710,7 +719,8 @@ Expected result:
 With more development time, I would add:
 
 - Role-based authorization for administrators
-- Database migrations using Alembic / Flask-Migrate
+- Versioned database migrations (numbered SQL migration files)
+- PostgreSQL support for production
 - Refresh tokens and token revocation
 - Redis caching
 - Rate limiting
@@ -721,7 +731,6 @@ With more development time, I would add:
 - Celery/background workers
 - Webhook retry processing
 - More unit and integration tests
-- Database transactions around more complex payment state changes
 - Production WSGI server configuration
 - CI pipeline for automated testing
 
